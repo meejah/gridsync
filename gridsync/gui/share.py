@@ -704,7 +704,8 @@ class PairFolderDialog(QDialog):
             await self.gateway.magic_folder.wait_for_invite(self.folder_name, invite["id"])
             self.subtext_label.setText("Waiting for other device...\nInvite was accepted\n")
             self._invite_d = None
-            self.close_button.setText("Close")
+            self.close_button.setText("Done")
+            self.close_button.setStyleSheet("color: green")
         except Exception as e:
             self._invite_d = None
             self.subtext_label.setText("Something went wrong:\n{}".format(e))
