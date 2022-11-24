@@ -21,9 +21,10 @@ from qtpy.QtWidgets import (
     QPushButton,
     QToolButton,
     QWidget,
+    QLineEdit,
 )
 from twisted.internet import reactor
-from twisted.internet.defer import CancelledError
+from twisted.internet.defer import CancelledError, ensureDeferred
 from twisted.python.failure import Failure
 
 from gridsync import config_dir, resource
@@ -529,6 +530,223 @@ class InviteReceiverDialog(QDialog):
         except AttributeError:
             pass
         self.closed.emit(self)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.close()
+
+
+
+
+class PairFolderDialog(QDialog):
+    """
+    Dialog to pair a folder with another device
+    """
+    completed = Signal(QWidget)
+    closed = Signal(QWidget)
+
+    def __init__(
+        self,
+        gateway: Tahoe,
+        gui: AbstractGui,
+        folder_name: str,
+    ) -> None:
+        super().__init__()
+        self.gateway = gateway
+        self.gui = gui
+        self.folder_name = folder_name
+
+        self.setMinimumSize(500, 300)
+
+        header_icon = QLabel(self)
+        icon = QFileIconProvider().icon(
+            QFileInfo(
+                self.gateway.magic_folder.get_directory(self.folder_name)
+            )
+        )
+        header_icon.setPixmap(icon.pixmap(50, 50))
+
+        header_text = QLabel(self)
+        header_text.setText(self.folder_name)
+        header_text.setFont(Font(18))
+        header_text.setAlignment(Qt.AlignCenter)
+
+        header_layout = QGridLayout()
+        header_layout.addWidget(header_icon, 1, 1)
+        header_layout.addWidget(header_text, 1, 2)
+
+        self.subtext_label = QLabel(self)
+        self.subtext_label.setFont(Font(10))
+        self.subtext_label.setStyleSheet("color: grey")
+        self.subtext_label.setWordWrap(True)
+        self.subtext_label.setAlignment(Qt.AlignCenter)
+
+        self.petname_label = QLabel(self)
+        self.petname_label.setFont(Font(10))
+        self.petname_label.setWordWrap(True)
+        self.petname_label.setAlignment(Qt.AlignCenter)
+        self.petname_label.setText("Device petname")
+
+        self.petname = QLineEdit(self)
+        self.petname.setFont(Font(10))
+        self.petname.setStyleSheet("color: grey")
+        self.petname.setAlignment(Qt.AlignCenter)
+
+        self.set_petname = QPushButton("Invite")
+        self.set_petname.clicked.connect(self.petname_set)
+
+        self.noise_label = QLabel()
+        font = Font(16)
+        font.setFamily("Courier")
+        font.setStyleHint(QFont.Monospace)
+        self.noise_label.setFont(font)
+        self.noise_label.setStyleSheet("color: grey")
+
+        self.noise_timer = QTimer()
+        self.noise_timer.timeout.connect(
+            lambda: self.noise_label.setText(b58encode(os.urandom(16)))
+        )
+
+        self.code_label = QLabel()
+        self.code_label.setFont(Font(18))
+        self.code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.code_label.hide()
+
+        self.box_title = QLabel(self)
+        self.box_title.setAlignment(Qt.AlignCenter)
+        self.box_title.setFont(Font(16))
+
+        self.box = QGroupBox()
+        self.box.setAlignment(Qt.AlignCenter)
+        self.box.setStyleSheet("QGroupBox {font-size: 16px}")
+
+        self.copy_button = QToolButton()
+        self.copy_button.setIcon(QIcon(resource("copy.png")))
+        self.copy_button.setToolTip("Copy to clipboard")
+        self.copy_button.setStyleSheet("border: 0px; padding: 0px;")
+        self.copy_button.hide()
+
+        box_layout = QGridLayout(self.box)
+        box_layout.addItem(HSpacer(), 1, 1)
+        box_layout.addWidget(self.noise_label, 1, 2)
+        box_layout.addWidget(self.code_label, 1, 3)
+        box_layout.addWidget(self.copy_button, 1, 4)
+        box_layout.addItem(HSpacer(), 1, 5)
+
+        self.close_button = QPushButton("Close and cancel invite")
+        self.close_button.setAutoDefault(False)
+
+        self.checkmark = QLabel()
+        self.checkmark.setPixmap(Pixmap("green_checkmark.png", 32))
+        self.checkmark.setAlignment(Qt.AlignCenter)
+        self.checkmark.hide()
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(2)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.hide()
+
+        layout = QGridLayout(self)
+        layout.addItem(VSpacer(), 0, 0)
+        layout.addItem(HSpacer(), 1, 1)
+        layout.addItem(HSpacer(), 1, 2)
+        layout.addItem(HSpacer(), 1, 3)
+        layout.addItem(HSpacer(), 1, 4)
+        layout.addItem(HSpacer(), 1, 5)
+        layout.addLayout(header_layout, 1, 3, Qt.AlignCenter)
+
+        layout.addWidget(self.petname_label, 2, 1)
+        layout.addWidget(self.petname, 2, 2)
+        layout.addWidget(self.set_petname, 2, 3)
+
+##        layout.addItem(VSpacer(), 2, 1)
+        layout.addWidget(self.box_title, 3, 2, 1, 3)
+        layout.addWidget(self.checkmark, 3, 3)
+        layout.addWidget(self.box, 4, 2, 1, 3)
+        layout.addWidget(self.progress_bar, 4, 2, 1, 3)
+        layout.addWidget(self.subtext_label, 5, 2, 1, 3)
+        layout.addItem(VSpacer(), 6, 1)
+        layout.addWidget(self.close_button, 7, 3)
+        layout.addItem(VSpacer(), 8, 1)
+
+        self.close_button.clicked.connect(self.close)
+
+        self.set_box_title("Generating invite code...")
+        self.subtext_label.setText("Creating folder invite(s)...\n\n")
+
+    def petname_set(self, checked: bool) -> None:
+        if not self.petname.displayText():
+            return False
+        self.petname.setEnabled(False)
+        self.set_petname.setEnabled(False)
+        self.noise_timer.start(75)
+        # XXX start the invite process
+        self._invite_d = ensureDeferred(self._do_invite(self.petname.displayText()))
+
+        def err(fail):
+            self.subtext_label.setText(str(fail.value))
+            self.noise_timer.stop()
+            self.noise_label.setText(str(type(fail)))
+            print("BAD", fail)
+        self._invite_d.addErrback(err)
+
+    async def _do_invite(self, petname: str) -> None:
+        invite = await self.gateway.magic_folder.create_invite(self.folder_name, petname)
+        print("XXX invite", invite)
+        self.noise_timer.stop()
+        self.noise_label.hide()
+        self.set_box_title("Your invite code is:")
+        self.subtext_label.setText("Waiting for other device...\n\n")
+        self.code_label.setText(invite["wormhole-code"])
+        self.code_label.show()
+        self.copy_button.show()
+        try:
+            await self.gateway.magic_folder.wait_for_invite(self.folder_name, invite["id"])
+            self.subtext_label.setText("Waiting for other device...\nInvite was accepted\n")
+            self._invite_d = None
+            self.close_button.setText("Close")
+        except Exception as e:
+            self._invite_d = None
+            self.subtext_label.setText("Something went wrong:\n{}".format(e))
+            self.close_button.setText("Close")
+            print(e)
+            print(type(e))
+
+    def set_box_title(self, text: str) -> None:
+        if sys.platform == "darwin":
+            self.box_title.setText(text)
+            self.box_title.show()
+        else:
+            self.box.setTitle(text)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._invite_d is not None:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Question)
+            msg.setWindowTitle("Cancel invitation?")
+            msg.setText(
+                'Are you sure you wish to cancel the invitation to "{}"?'.format(
+                    self.gateway.name
+                )
+            )
+            msg.setInformativeText(
+                'The invite code "{}" will no longer be valid.'.format(
+                    self.code_label.text()
+                )
+            )
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            msg.setDefaultButton(QMessageBox.No)
+            if msg.exec_() == QMessageBox.Yes:
+                self._invite_d.cancel()
+                event.accept()
+                self.closed.emit(self)
+            else:
+                event.ignore()
+        else:
+            event.accept()
+            if self.noise_timer.isActive():
+                self.noise_timer.stop()
+            self.closed.emit(self)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:

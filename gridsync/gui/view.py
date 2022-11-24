@@ -52,7 +52,7 @@ from gridsync.desktop import open_path
 from gridsync.gui.font import Font
 from gridsync.gui.model import Model
 from gridsync.gui.pixmap import Pixmap
-from gridsync.gui.share import InviteSenderDialog
+from gridsync.gui.share import InviteSenderDialog, PairFolderDialog
 from gridsync.gui.widgets import ClickableLabel, HSpacer, VSpacer
 from gridsync.magic_folder import MagicFolderStatus
 from gridsync.msg import error
@@ -203,9 +203,8 @@ class View(QTreeView):
             self.select_download_location([name])
 
     def open_invite_sender_dialog(self, folder_names: list) -> None:
-        isd = InviteSenderDialog(self.gateway, self.gui, folder_names)
-        self.invite_sender_dialogs.append(isd)  # TODO: Remove on close
-        isd.show()
+        self.pair = PairFolderDialog(self.gateway, self.gui, folder_names[0])
+        self.pair.show()
 
     @inlineCallbacks
     def download_folder(
@@ -449,41 +448,28 @@ class View(QTreeView):
         open_action = QAction(self.get_model().icon_folder_gray, "Open")
         open_action.triggered.connect(lambda: self.open_folders(selected))
 
-        share_menu = QMenu()
-        share_menu.setIcon(QIcon(resource("laptop.png")))
-        share_menu.setTitle("Sync with device")  # XXX Rephrase?
-        invite_action = QAction(
-            QIcon(resource("invite.png")), "Create Invite Code..."
+        pair_action = QAction(
+            QIcon(resource("invite.png")), "Pair with another device..."
         )
-        invite_action.triggered.connect(
+        pair_action.triggered.connect(
             lambda: self.open_invite_sender_dialog(selected)
         )
-        share_menu.addAction(invite_action)
 
         remove_action = QAction(
             QIcon(resource("close.png")), "Remove from Recovery Key..."
         )
         menu.addAction(open_action)
         if features.invites:
-            menu.addMenu(share_menu)
+            menu.addAction(pair_action)
         menu.addSeparator()
         menu.addAction(remove_action)
         if selection_is_remote:
             open_action.setEnabled(False)
-            share_menu.setEnabled(False)
+            pair_action.setEnabled(False)
             remove_action.triggered.connect(
                 lambda: self.confirm_remove_folder_backup(selected)
             )
         else:
-            for folder in selected:
-                # XXX/TODO: Remove?
-                if not self.gateway.magic_folder.magic_folders[folder].get(
-                    "admin_dircap"
-                ):
-                    share_menu.setEnabled(False)
-                    share_menu.setTitle(
-                        "Sync with device (disabled; no admin access)"
-                    )
             remove_action.setText("Stop syncing...")
             remove_action.triggered.connect(
                 lambda: self.confirm_stop_syncing(selected)

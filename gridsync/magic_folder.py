@@ -45,7 +45,9 @@ class MagicFolderProcessError(MagicFolderError):
 
 
 class MagicFolderWebError(MagicFolderError):
-    pass
+    def __init__(self, msg, content):
+        super().__init__(self, msg)
+        self.content = content
 
 
 class MagicFolderStatus(Enum):
@@ -643,7 +645,8 @@ class MagicFolder:
         if resp.code in (200, 201) or (resp.code == 404 and error_404_ok):
             return json.loads(content)
         raise MagicFolderWebError(
-            f"Error {resp.code} requesting {method} /v1{path}: {content}"
+            f"Error {resp.code} requesting {method} /v1{path}: {content}",
+            content,
         )
 
     async def get_folders(self) -> dict[str, dict]:
@@ -695,6 +698,50 @@ class MagicFolder:
             del self.magic_folders[folder_name]
         except KeyError:
             pass
+
+    async def create_invite(
+            self, folder_name: str, device_name: str,
+    ) -> dict:
+        """
+        Invites a new device with `device_name` for the given
+        `folder_name` via magic-wormhole API
+
+        :returns: JSON with keys: `"id"`, `"wormhole-code"` among
+            other keys (see magic-wormhole API docs)
+        """
+        invite = await self._request(
+            "POST",
+            f"/magic-folder/{folder_name}/invite",
+            body=json.dumps({
+                "petname": device_name,
+            }).encode(),
+        )
+        return invite
+
+    async def wait_for_invite(
+            self, folder_name: str, invite_id: str,
+    ) -> None:
+        """
+        Use the magic-folder API to wait until a previously-created invite
+        has completed (for better or worse).
+
+        :raises: Exception if the invite failed
+        """
+        # this also returns the marshalled "invite" same as
+        # create-invite above if required
+        try:
+            invite = await self._request(
+                "POST",
+                f"/magic-folder/{folder_name}/invite-wait",
+                body=json.dumps({
+                    "id": invite_id,
+                }).encode(),
+            )
+        except MagicFolderWebError as e:
+            data = json.loads(e.content)
+            raise Exception(data["reason"])
+        print("ZZZZ", invite)
+
 
     def get_directory(self, folder_name: str) -> str:
         return self.magic_folders.get(folder_name, {}).get("magic_path", "")
